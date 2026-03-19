@@ -1,0 +1,46 @@
+#import "./add.flx"
+
+fnc main() -> Result<int32, string> {
+    let a: int32 = 5;
+    let b: int32 = 4;
+    let c: int32 = add(a, b);
+    let d: int32; 
+    add(a, b, &d);
+    let e: &str = "abcd";
+    let f: string = "abcd".to_string(); // Комментарий: &str ссылка (так же как и в языке Rust), а string уже в куче и является другим типом, так же &str по умолчанию ссылка
+    let g: float;
+    let h: double;
+    let i: int8;
+    let j: int16;
+    let k: int32;
+    let l: int128;
+    let m: uint8;
+    let n: uint16;
+    let o: uint32;
+    let p: uint64;
+    let q: uint128;
+    let w: size_t;
+    let z: bool;
+    let capacity = 4;
+    let ab: int32[catacity] = [1, 45, 234, 64];
+    for (let x: int8; x < 15; x++) {
+        if (i == 10) {
+            continue;
+        } else if (i == 13) {
+            break;
+        } else {
+            println(x);
+        }
+    }
+    i++;
+    ++i;
+    i--;
+    --i;
+    println(i < j);  // неявное приведение к большему типу если типы разные
+    println(i > j);
+    println(i == j);
+    println(i >= j);
+    println(i <= j);
+    println(i != j);
+    return Ok(0);
+}

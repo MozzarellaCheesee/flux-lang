@@ -1,7 +1,5 @@
 #pragma once
 #include "flux/ast/ast_node.h"
-#include "flux/ast/ast_node.h"
-#include "flux/ast/type.h"
 #include "flux/ast/stmt.h"
 #include <vector>
 #include <memory>
@@ -172,6 +170,34 @@ namespace flux {
         std::vector<std::unique_ptr<MatchArm>> arms;
 
         explicit MatchExpr(std::unique_ptr<ASTNode> s) : subject(std::move(s)) {}
+        void accept(ASTVisitor& v) override;
+    };
+
+    // ── ООП ─────────────────────────────────────────────────
+
+    struct FieldAccessExpr : ASTNode {
+        std::unique_ptr<ASTNode> object;
+        std::string              field;
+        FieldAccessExpr(std::unique_ptr<ASTNode> obj, std::string f)
+            : object(std::move(obj)), field(std::move(f)) {}
+        void accept(ASTVisitor& v) override;
+    };
+
+    struct FieldInit {
+        std::string              name;
+        std::unique_ptr<ASTNode> value;
+        FieldInit(std::string n, std::unique_ptr<ASTNode> v)
+            : name(std::move(n)), value(std::move(v)) {}
+    };
+
+    struct StructInitExpr : ASTNode {
+        std::string            type_name;
+        std::vector<FieldInit> fields;
+        explicit StructInitExpr(std::string n) : type_name(std::move(n)) {}
+        void accept(ASTVisitor& v) override;
+    };
+
+    struct SelfExpr : ASTNode {
         void accept(ASTVisitor& v) override;
     };
 

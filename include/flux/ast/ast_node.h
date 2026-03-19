@@ -7,12 +7,13 @@ namespace flux {
 
     struct TypeNode {
         SourceLocation loc;
+        virtual void accept(ASTVisitor& v) = 0;
         virtual ~TypeNode() = default;
     };
 
     struct ASTNode {
         SourceLocation loc;
-        virtual void accept(ASTVisitor& v);
+        virtual void accept(ASTVisitor& v) = 0;
         virtual ~ASTNode() = default;
     };
 

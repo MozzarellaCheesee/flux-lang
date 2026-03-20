@@ -1,66 +1,105 @@
 #pragma once
-#include "flux/ast/ast.h"
-#include "flux/ast/decl.h"
-#include "flux/ast/expr.h"
-#include "flux/common/diagnostic.h"
-#include <llvm/IR/LLVMContext.h>
+#include "flux/ast/ast_visitor.h"
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
-#include <llvm/IR/LegacyPassManager.h>
-#include <llvm/Support/TargetSelect.h>
-#include <llvm/Target/TargetMachine.h>
-#include <llvm/Support/TargetRegistry.h>
-#include <llvm/Support/FileSystem.h>
+#include <llvm/IR/Value.h>
+#include <map>
+#include <stack>
 #include <string>
+#include <memory>
 
 namespace flux {
 
-    class CodeGen {
+    class LLVMCodegen : public ASTVisitor {
     public:
-        explicit CodeGen(DiagEngine& diag);
-        ~CodeGen();
+        explicit LLVMCodegen(const std::string& module_name);
 
-        // Главная точка входа
-        bool generate(ProgramNode& program, const std::string& output_path);
+        // Генерирует объектный файл (.o). Возвращает false при ошибке.
+        bool emit_object_file(const std::string& output_path);
 
     private:
-        // Контекст LLVM — один на всю программу
-        llvm::LLVMContext context_;
-        
-        // Модуль LLVM — аналог объектного файла
-        std::unique_ptr<llvm::Module> module_;
-        
-        // Builder — для генерации инструкций
-        std::unique_ptr<llvm::IRBuilder<>> builder_;
-        
-        // Target machine — для генерации машинного кода
-        std::unique_ptr<llvm::TargetMachine> target_machine_;
+        // ── Visitor overrides ──────────────────────────────────
+        void visit(ProgramNode&)      override;
+        void visit(FuncDecl&)         override;
+        void visit(VarDecl&)          override;
+        void visit(ParamDecl&)        override;
+        void visit(FieldDecl&)        override;
+        void visit(StructDecl&)       override;
+        void visit(ImplDecl&)         override;
+        void visit(ClassDecl&)        override;
 
-        DiagEngine& diag_;
+        void visit(BlockStmt&)        override;
+        void visit(ReturnStmt&)       override;
+        void visit(ExprStmt&)         override;
+        void visit(IfStmt&)           override;
+        void visit(ForStmt&)          override;
+        void visit(WhileStmt&)        override;
+        void visit(ContinueStmt&)     override;
+        void visit(BreakStmt&)        override;
 
-        // ── Генерация по типам AST ────────────────────────────────
-        void codegen(ProgramNode& node);
-        void codegen(FuncDecl& node);
-        void codegen(VarDecl& node);
-        void codegen(BlockStmt& node);
-        void codegen(ReturnStmt& node);
-        void codegen(ExprStmt& node);
+        void visit(IntLiteral&)       override;
+        void visit(FloatLiteral&)     override;
+        void visit(BoolLiteral&)      override;
+        void visit(StrLiteral&)       override;
+        void visit(ArrayLiteral&)     override;
+        void visit(IdentExpr&)        override;
+        void visit(BinaryExpr&)       override;
+        void visit(UnaryExpr&)        override;
+        void visit(CallExpr&)         override;
+        void visit(MethodCallExpr&)   override;
+        void visit(IndexExpr&)        override;
+        void visit(AssignExpr&)       override;
+        void visit(ImplicitCastExpr&) override;
+        void visit(MatchExpr&)        override;
+        void visit(MatchArm&)         override;
+        void visit(FieldAccessExpr&)  override;
+        void visit(StructInitExpr&)   override;
+        void visit(SelfExpr&)         override;
+
+        void visit(PrimitiveType&)    override;
+        void visit(RefType&)          override;
+        void visit(UnitType&)         override;
+        void visit(ArrayType&)        override;
+        void visit(GenericType&)      override;
+        void visit(SliceType&)        override;
+        void declare_builtins();
         
-        llvm::Type* llvm_type(const std::string& flux_type);
-        llvm::Type* llvm_int_type(int bits);
-        llvm::Type* llvm_float_type(const std::string& flux_type);
-        
-        // ── Генерация выражений ───────────────────────────────────
-        llvm::Value* codegen_expr(ASTNode& node);
-        llvm::Value* codegen(IntLiteral& node);
-        llvm::Value* codegen(IdentExpr& node);
-        llvm::Value* codegen(BinaryExpr& node);
-        llvm::Value* codegen(CallExpr& node);
-        
-        // ── Вспомогательные ───────────────────────────────────────
-        llvm::Function* get_or_declare_function(const std::string& name, llvm::FunctionType* type);
-        llvm::AllocaInst* create_entry_block_alloca(llvm::Function* func, const std::string& name,llvm::Type* type);
-        std::string mangle_name(const std::string& flux_name);
+        llvm::LLVMContext                  ctx_;
+        llvm::IRBuilder<>                  builder_;
+        std::unique_ptr<llvm::Module>      module_;
+
+        // Последнее вычисленное значение выражения
+        llvm::Value*                       last_val_ = nullptr;
+        // Последний вычисленный тип
+        llvm::Type*                        last_type_ = nullptr;
+
+        // Таблица переменных: имя → alloca
+        std::map<std::string, llvm::AllocaInst*> locals_;
+
+        // Для break/continue — стек блоков цикла
+        std::stack<llvm::BasicBlock*>  loop_exit_blocks_;
+        std::stack<llvm::BasicBlock*>  loop_cont_blocks_;
+
+        // Таблица struct-типов: имя → StructType + порядок полей
+        struct StructInfo {
+            llvm::StructType*              type;
+            std::vector<std::string>       field_names;
+        };
+        std::map<std::string, StructInfo>  structs_;
+
+        // self-pointer для методов
+        llvm::Value*                       self_ptr_ = nullptr;
+
+        // ── Helpers ────────────────────────────────────
+        llvm::Type*        llvm_type(TypeNode* t);
+        llvm::Type*        llvm_primitive(const std::string& name);
+        llvm::AllocaInst*  create_entry_alloca(llvm::Function* f,
+                                                const std::string& name,
+                                                llvm::Type* ty);
+        llvm::Value*       load_if_ptr(llvm::Value* v);
+        llvm::Value*       emit_expr(ASTNode& n);  // хелпер: вызывает accept и возвращает last_val_
     };
+
 
 } // namespace flux

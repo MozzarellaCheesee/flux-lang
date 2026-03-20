@@ -1,0 +1,5 @@
+fnc main() -> int32 {
+    let hello: &str = "Hello, World!";
+    println(hello);
+    return 0;
+}

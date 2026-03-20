@@ -1,4 +1,5 @@
 #include "flux/parser/parser.h"
+#include "flux/ast/type.h"
 
 namespace flux {
 
@@ -219,6 +220,11 @@ namespace flux {
                 return parse_for_stmt();
             case TokenKind::KW_WHILE:
                 return parse_while_stmt();
+            case TokenKind::KW_MATCH: {
+                auto expr = parse_expr(); // parse_atom увидит KW_MATCH
+                match(TokenKind::SEMICOLON); // ; после match необязательна
+                return std::make_unique<ExprStmt>(std::move(expr));
+            }
             case TokenKind::KW_CONTINUE: {
                 auto loc = current().loc;
                 consume();
@@ -447,5 +453,357 @@ namespace flux {
 
         // нет префиксного оператора — атом + постфикс
         return parse_postfix(parse_atom());
+    }
+
+    // Постфиксные операторы: x++, x--, obj.field, obj.method(), arr[i]
+    std::unique_ptr<ASTNode> Parser::parse_postfix(std::unique_ptr<ASTNode> lhs) {
+        while (true) {
+            auto loc = current().loc;
+
+            if (match(TokenKind::PLUS_PLUS)) {
+                auto node = std::make_unique<UnaryExpr>(
+                    UnaryExpr::Op::PostInc, std::move(lhs));
+                node->loc = loc;
+                lhs = std::move(node);
+
+            } else if (match(TokenKind::MINUS_MINUS)) {
+                auto node = std::make_unique<UnaryExpr>(
+                    UnaryExpr::Op::PostDec, std::move(lhs));
+                node->loc = loc;
+                lhs = std::move(node);
+
+            } else if (match(TokenKind::DOT)) {
+                // obj.member — поле или метод
+                auto member = std::string(expect(TokenKind::IDENT, "member name").lexeme);
+                if (check(TokenKind::LPAREN)) {
+                    // obj.method(args)
+                    consume(); // (
+                    auto node = std::make_unique<MethodCallExpr>(std::move(lhs), member);
+                    node->loc = loc;
+                    while (!check(TokenKind::RPAREN) && !check(TokenKind::END_OF_FILE)) {
+                        node->args.push_back(parse_expr());
+                        if (!match(TokenKind::COMMA)) break;
+                    }
+                    expect(TokenKind::RPAREN, ")");
+                    lhs = std::move(node);
+                } else {
+                    // obj.field
+                    auto node = std::make_unique<FieldAccessExpr>(std::move(lhs), member);
+                    node->loc = loc;
+                    lhs = std::move(node);
+                }
+
+            } else if (match(TokenKind::LBRACKET)) {
+                // arr[i]
+                auto idx = parse_expr();
+                expect(TokenKind::RBRACKET, "]");
+                auto node = std::make_unique<IndexExpr>(std::move(lhs), std::move(idx));
+                node->loc = loc;
+                lhs = std::move(node);
+
+            } else {
+                break;
+            }
+        }
+        return lhs;
+    }
+
+    // Неделимые единицы выражения: литералы, идентификаторы, вызовы, скобки
+    std::unique_ptr<ASTNode> Parser::parse_atom() {
+        auto loc = current().loc;
+
+        // Целочисленный литерал
+        if (check(TokenKind::LIT_INT)) {
+            auto val = std::stoll(std::string(current().lexeme));
+            consume();
+            auto node = std::make_unique<IntLiteral>(val);
+            node->loc = loc;
+            return node;
+        }
+
+        // Вещественный литерал
+        if (check(TokenKind::LIT_FLOAT)) {
+            auto val = std::stod(std::string(current().lexeme));
+            consume();
+            auto node = std::make_unique<FloatLiteral>(val);
+            node->loc = loc;
+            return node;
+        }
+
+        // Строковый литерал
+        if (check(TokenKind::LIT_STRING)) {
+            auto val = std::string(current().lexeme);
+            consume();
+            auto node = std::make_unique<StrLiteral>(val);
+            node->loc = loc;
+            return node;
+        }
+
+        // Булевые литералы
+        if (check(TokenKind::KW_TRUE)) {
+            consume();
+            auto node = std::make_unique<BoolLiteral>(true);
+            node->loc = loc;
+            return node;
+        }
+        if (check(TokenKind::KW_FALSE)) {
+            consume();
+            auto node = std::make_unique<BoolLiteral>(false);
+            node->loc = loc;
+            return node;
+        }
+
+        // self
+        if (check(TokenKind::KW_SELF)) {
+            consume();
+            auto node = std::make_unique<SelfExpr>();
+            node->loc = loc;
+            return node;
+        }
+
+        // Массив: [1, 2, 3]
+        if (match(TokenKind::LBRACKET)) {
+            auto node = std::make_unique<ArrayLiteral>();
+            node->loc = loc;
+            while (!check(TokenKind::RBRACKET) && !check(TokenKind::END_OF_FILE)) {
+                node->elements.push_back(parse_expr());
+                if (!match(TokenKind::COMMA)) break;
+            }
+            expect(TokenKind::RBRACKET, "]");
+            return node;
+        }
+
+        // Скобки: (expr)
+        if (match(TokenKind::LPAREN)) {
+            auto expr = parse_expr();
+            expect(TokenKind::RPAREN, ")");
+            return expr;
+        }
+
+        // match subject { pattern => { } ... }
+        if (match(TokenKind::KW_MATCH)) {
+            // parse_expr вызвал бы parse_struct_init для "func {"
+            // используем parse_prefix напрямую — он не смотрит на {
+            allow_struct_init_ = false; //  func { не будет StructInitExpr
+            auto subject = parse_prefix();  //  заменяем parse_expr() на parse_prefix()
+            allow_struct_init_ = true;  //  восстанавливаем для остального кода
+            expect(TokenKind::LBRACE, "{");
+            auto node = std::make_unique<MatchExpr>(std::move(subject));
+            node->loc = loc;
+            while (!check(TokenKind::RBRACE) && !check(TokenKind::END_OF_FILE)) {
+                auto pattern = parse_pattern();
+                expect(TokenKind::FAT_ARROW, "=>");
+                // однострочный arm: => expr,
+                std::unique_ptr<BlockStmt> body;
+                if (check(TokenKind::LBRACE)) {
+                    body = parse_block();
+                } else {
+                    auto expr = parse_expr();
+                    body = std::make_unique<BlockStmt>();
+                    body->stmts.push_back(std::make_unique<ExprStmt>(std::move(expr)));
+                }
+                match(TokenKind::COMMA);
+                auto arm = std::make_unique<MatchArm>(std::move(pattern), std::move(body));
+                arm->loc = loc;
+                node->arms.push_back(std::move(arm));
+            }
+            expect(TokenKind::RBRACE, "}");
+            return node;
+        }
+
+        // Идентификатор: переменная, вызов функции, инициализация структуры
+        if (check(TokenKind::IDENT)) {
+            auto name = std::string(consume().lexeme);
+            if (check(TokenKind::LPAREN)) return parse_call(name);
+            if (check(TokenKind::LBRACE) && allow_struct_init_) 
+                return parse_struct_init(name);
+            auto node = std::make_unique<IdentExpr>(name);
+            node->loc = loc;
+            return node;
+        }
+
+        // Ошибка — ничего не подошло
+        diag_.emit(DiagLevel::Error, loc,
+                "Expected expression, got '" + std::string(current().lexeme) + "'");
+        consume(); // recovery
+        auto dummy = std::make_unique<IntLiteral>(0);
+        dummy->loc = loc;
+        return dummy;
+    }
+
+    // foo(a, b, c)
+    std::unique_ptr<ASTNode> Parser::parse_call(std::string callee) {
+        auto loc = current().loc;
+        consume(); // (
+        auto node = std::make_unique<CallExpr>(std::move(callee));
+        node->loc = loc;
+        while (!check(TokenKind::RPAREN) && !check(TokenKind::END_OF_FILE)) {
+            node->args.push_back(parse_expr());
+            if (!match(TokenKind::COMMA)) break;
+        }
+        expect(TokenKind::RPAREN, ")");
+        return node;
+    }
+
+    // Point { x: 1.0, y: 2.0 }
+    std::unique_ptr<ASTNode> Parser::parse_struct_init(std::string type_name) {
+        auto loc = current().loc;
+        consume(); // {
+        auto node = std::make_unique<StructInitExpr>(std::move(type_name));
+        node->loc = loc;
+        while (!check(TokenKind::RBRACE) && !check(TokenKind::END_OF_FILE)) {
+            auto fname = std::string(expect(TokenKind::IDENT, "field name").lexeme);
+            expect(TokenKind::COLON, ":");
+            auto fval  = parse_expr();
+            node->fields.push_back(FieldInit(fname, std::move(fval)));
+            match(TokenKind::COMMA);
+        }
+        expect(TokenKind::RBRACE, "}");
+        return node;
+    }
+
+    // Паттерны для match
+    std::unique_ptr<PatternNode> Parser::parse_pattern() {
+        auto loc = current().loc;
+
+        // _ — wildcard, покрывает всё
+        if (check(TokenKind::UNDERSCORE)) {
+            consume();
+            auto node = std::make_unique<WildcardPattern>();
+            node->loc = loc;
+            return node;
+        }
+
+        // Литеральные паттерны: 0, "str", true, false
+        if (check(TokenKind::LIT_INT)    || check(TokenKind::LIT_FLOAT) ||
+            check(TokenKind::LIT_STRING) ||
+            check(TokenKind::KW_TRUE)    || check(TokenKind::KW_FALSE))
+        {
+            auto val  = parse_atom();
+            auto node = std::make_unique<LiteralPattern>(std::move(val));
+            node->loc = loc;
+            return node;
+        }
+
+        // Идентификатор или конструктор: x, Ok(x), Err(e)
+        if (check(TokenKind::IDENT)) {
+            auto name = std::string(consume().lexeme);
+            if (check(TokenKind::LPAREN)) {
+                // конструктор с аргументами: Ok(x), Err(e)
+                consume(); // (
+                auto node = std::make_unique<ConstructorPattern>(name);
+                node->loc = loc;
+                while (!check(TokenKind::RPAREN) && !check(TokenKind::END_OF_FILE)) {
+                    node->args.push_back(parse_pattern());
+                    if (!match(TokenKind::COMMA)) break;
+                }
+                expect(TokenKind::RPAREN, ")");
+                return node;
+            }
+            // просто переменная-паттерн: x
+            auto node = std::make_unique<IdentPattern>(name);
+            node->loc = loc;
+            return node;
+        }
+
+        diag_.emit(DiagLevel::Error, loc,
+                "Expected pattern, got '" + std::string(current().lexeme) + "'");
+        return std::make_unique<WildcardPattern>(); // recovery
+    }
+
+    // Проверяет — начинается ли текущий токен тип
+    bool Parser::is_type_start() const {
+        switch (current().kind) {
+            case TokenKind::KW_BOOL:
+            case TokenKind::KW_INT8:   
+            case TokenKind::KW_INT16:
+            case TokenKind::KW_INT32:  
+            case TokenKind::KW_INT64:  
+            case TokenKind::KW_INT128:
+            case TokenKind::KW_UINT8:  
+            case TokenKind::KW_UINT16:
+            case TokenKind::KW_UINT32: 
+            case TokenKind::KW_UINT64: 
+            case TokenKind::KW_UINT128:
+            case TokenKind::KW_FLOAT:  
+            case TokenKind::KW_DOUBLE:
+            case TokenKind::KW_ISIZE_T: 
+            case TokenKind::KW_USIZE_T:
+            case TokenKind::KW_STR:    
+            case TokenKind::KW_STRING:
+            case TokenKind::IDENT: return true;
+            default: return false;
+        }
+    }
+
+    std::unique_ptr<TypeNode> Parser::parse_type() {
+        auto loc = current().loc;
+
+        // &T — ссылочный тип
+        if (match(TokenKind::AMP)) {
+            auto inner = parse_type();
+            auto node  = std::make_unique<RefType>(std::move(inner));
+            node->loc  = loc;
+            return node;
+        }
+
+        // () — unit тип
+        if (check(TokenKind::LPAREN)) {
+            consume();
+            expect(TokenKind::RPAREN, ")");
+            auto node = std::make_unique<UnitType>();
+            node->loc = loc;
+            return node;
+        }
+
+        // Примитив, пользовательский тип, Generic или Array
+        if (is_type_start()) {
+            auto name = std::string(consume().lexeme);
+
+            // Result<int32, string>, Option<T>
+            if (match(TokenKind::LT)) {
+                auto node = std::make_unique<GenericType>(name);
+                node->loc = loc;
+                while (!check(TokenKind::GT) && !check(TokenKind::END_OF_FILE)) {
+                    node->args.push_back(parse_type());
+                    if (!match(TokenKind::COMMA)) break;
+                }
+                expect(TokenKind::GT, ">");
+                return node;
+            }
+
+            // Массив
+            if (match(TokenKind::LBRACKET)) {
+                auto elem = std::make_unique<PrimitiveType>(name);
+                elem->loc = loc;
+                
+                // string[] — сразу закрывающая скобка, размер не указан
+                if (match(TokenKind::RBRACKET)) { 
+                    auto node = std::make_unique<SliceType>(std::move(elem));
+                    node->loc = loc;
+                    return node;
+                }
+
+                // int32[N] — есть выражение размера
+                auto size = parse_expr();
+                expect(TokenKind::RBRACKET, "]");
+                elem->loc = loc;
+                auto node = std::make_unique<ArrayType>(
+                    std::move(elem), std::move(size));
+                node->loc = loc;
+                return node;
+            }
+
+            // просто примитив или имя типа
+            auto node = std::make_unique<PrimitiveType>(name);
+            node->loc = loc;
+            return node;
+        }
+
+        diag_.emit(DiagLevel::Error, loc,
+                "Expected type, got '" + std::string(current().lexeme) + "'");
+        auto dummy = std::make_unique<PrimitiveType>("unknown");
+        dummy->loc = loc;
+        return dummy;
     }
 }

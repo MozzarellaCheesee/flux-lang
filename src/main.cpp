@@ -1,44 +1,57 @@
 #include "flux/lexer/lexer.h"
 #include "flux/common/diagnostic.h"
+#include "flux/parser/parser.h"
+#include "flux/preprocessor/preprocessor.h"
+#include "flux/sema/sema.h"
 #include <iostream>
-#include <iomanip>
+#include <filesystem>
+#include <fstream>
 
 using namespace flux;
 
-int main() {
-    std::string src = R"(
-        #import "./add.flx"
-        fnc main() -> Result<int32, string> {
-            let a: int32 = 5;
-            let b: int32 = 4;
-            let c: int32 = add(a, b);
-            let d: int32; 
-            add(a, b, &d);
-            let e: &str = "abcd";
-            let f: string = "abcd".to_string(); // Комментарий: &str ссылка (так же как и в языке Rust), а string уже в куче и является другим типом, так же &str по умолчанию ссылка
-            let capacity = 4;
-            let ab: int32[catacity] = [1, 45, 234, 64];
-            for (let x: int8; x < 15; x++) {
-                println(x);
-            }
-            i++;
-            ++i;
-            println(i < j);  // неявное приведение к большему типу если типы разные
-            return Ok(0);
-            match func {
-                Ok(result) => println(result),
-                Err(err) => println(err),
-                _ => {println("unreachble")}
-            };
-        }
-    )";
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "Usage: fluxc <file.flx>\n";
+        return 1;
+    }
 
-    DiagEngine diag;
-    Lexer lexer(src, "<test>", diag);
+    std::filesystem::path filepath = argv[1];
+    // Читаем файл
+    std::ifstream file(filepath);
+    
+    if (!file.is_open()) {
+        std::cerr << "Cannot open file: " << filepath << "\n";
+        return 1;
+    }
+    std::ostringstream ss;
+    ss << file.rdbuf();
+    std::string src = ss.str();
+
+    flux::DiagEngine diag;
+    // Лексер
+    flux::Lexer lexer(src, filepath.string().c_str(), diag);
     auto tokens = lexer.tokenize();
 
-    for (auto& tok : tokens) {
-        std::string_view name = token_kind_name(tok.kind);
-        std::cout << std::left << std::setw(16) << name << tok.lexeme << "\n";
+    // Препроцессор — base_dir = директория входного файла
+    flux::Preprocessor preprocessor(diag, filepath.parent_path());
+    auto expanded = preprocessor.process(tokens, filepath);
+
+    if (diag.has_errors()) { diag.print_all(); return 1; }
+
+    // Парсер
+    flux::Parser parser(std::move(expanded), diag);
+    auto ast = parser.parse_program();
+
+    // Семантический анализатор
+    flux::SemanticAnalyzer sema(diag);
+    sema.analyze(*ast);
+
+    if (diag.has_errors()) {
+        diag.print_all();
+        return 1;
     }
+
+    std::cout << "OK: " << ast->decls.size() << " top-level decls\n";
+    std::cout << "Sema OK\n";
+    return 0;
 }

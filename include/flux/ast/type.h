@@ -35,4 +35,10 @@ namespace flux {
         explicit GenericType(std::string n) : name(std::move(n)) {}
         void accept(ASTVisitor& v) override;
     };
+
+    struct SliceType : TypeNode {
+        std::unique_ptr<TypeNode> element;
+        explicit SliceType(std::unique_ptr<TypeNode> e) : element(std::move(e)) {}
+        void accept(ASTVisitor& v) override;
+    };
 }

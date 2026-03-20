@@ -56,6 +56,7 @@ namespace flux {
                 return make_token(TokenKind::MINUS, start);
             case '=':
                 if (peek() == '=') { advance(); return make_token(TokenKind::EQ_EQ, start); }
+                if (peek() == '>') { advance(); return make_token(TokenKind::FAT_ARROW, start); }
                 return make_token(TokenKind::EQ, start);
             case '!':
                 if (peek() == '=') { advance(); return make_token(TokenKind::BANG_EQ, start); }

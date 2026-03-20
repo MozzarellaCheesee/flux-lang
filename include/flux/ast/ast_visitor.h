@@ -15,8 +15,10 @@ namespace flux {
         virtual void visit(UnitType&)            = 0;
         virtual void visit(ArrayType&)           = 0;
         virtual void visit(GenericType&)         = 0;
+        virtual void visit(SliceType&)           = 0;
 
         // ── Declarations ─────────────────────────────────
+        virtual void visit(ProgramNode&)         = 0;
         virtual void visit(FuncDecl&)            = 0;
         virtual void visit(VarDecl&)             = 0;
         virtual void visit(ParamDecl&)           = 0;
@@ -51,10 +53,9 @@ namespace flux {
         virtual void visit(ImplicitCastExpr&)    = 0;
         virtual void visit(MatchExpr&)           = 0;
         virtual void visit(MatchArm&)            = 0;
-        virtual void visit(ProgramNode&)         = 0;
-        virtual void visit(FieldAccessExpr&) = 0;
-        virtual void visit(StructInitExpr&)  = 0;
-        virtual void visit(SelfExpr&)        = 0;
+        virtual void visit(FieldAccessExpr&)     = 0;
+        virtual void visit(StructInitExpr&)      = 0;
+        virtual void visit(SelfExpr&)            = 0;
     };
 
 }

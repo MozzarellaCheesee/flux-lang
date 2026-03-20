@@ -56,5 +56,6 @@ namespace flux {
         std::vector<Token> tokens_;
         size_t             pos_ = 0;
         DiagEngine&        diag_;
+        bool allow_struct_init_ = true;
     };
 }

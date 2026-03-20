@@ -3,3 +3,5 @@
 .cache
 /build
 /build-vsc
+.vs
+/out

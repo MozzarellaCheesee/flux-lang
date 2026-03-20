@@ -91,6 +91,6 @@ namespace flux {
         ClassDecl(bool pub, std::string n)
             : is_pub(pub), name(std::move(n)) {}
         void accept(ASTVisitor& v) override;
-};
+    };
 
 }

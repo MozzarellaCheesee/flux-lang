@@ -1,5 +1,9 @@
 fnc main() -> int32 {
-    let hello: &str = "Hello, World!";
-    println(hello);
+    let a: int32 = 6;
+    match a {
+        4 => { println("4"); },
+        6 => { println("6"); },
+        _ => { println("no"); }
+    }
     return 0;
 }

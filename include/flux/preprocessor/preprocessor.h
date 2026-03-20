@@ -26,4 +26,4 @@ private:
     std::vector<std::string>        source_store_;
 };
 
-} // namespace flux
+}

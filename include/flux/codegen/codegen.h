@@ -17,6 +17,10 @@ namespace flux {
 
         // Генерирует объектный файл (.o). Возвращает false при ошибке.
         bool emit_object_file(const std::string& output_path);
+        bool emit_assembly(const std::string& output_path);
+        bool emit_llvm_ir(const std::string& output_path);
+        void dump_ir();
+        void set_target_triple(const std::string& triple) { target_triple_ = triple; }
 
     private:
         // ── Visitor overrides ──────────────────────────────────
@@ -64,7 +68,7 @@ namespace flux {
         void visit(GenericType&)      override;
         void visit(SliceType&)        override;
         void declare_builtins();
-        
+
         llvm::LLVMContext                  ctx_;
         llvm::IRBuilder<>                  builder_;
         std::unique_ptr<llvm::Module>      module_;
@@ -90,6 +94,7 @@ namespace flux {
 
         // self-pointer для методов
         llvm::Value*                       self_ptr_ = nullptr;
+        std::string target_triple_;
 
         // ── Helpers ────────────────────────────────────
         llvm::Type*        llvm_type(TypeNode* t);
@@ -102,4 +107,4 @@ namespace flux {
     };
 
 
-} // namespace flux
+}

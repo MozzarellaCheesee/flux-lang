@@ -71,4 +71,4 @@ namespace flux {
         void accept(ASTVisitor& v) override;
     };
 
-} // namespace flux
+}

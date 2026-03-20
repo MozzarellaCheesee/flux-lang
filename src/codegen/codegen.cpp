@@ -12,7 +12,6 @@
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Target/TargetOptions.h>
-#include <llvm/MC/TargetRegistry.h>   // LLVM ≥ 14: MCTargetRegistry
 
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/ADT/APFloat.h>
@@ -35,56 +34,98 @@ namespace flux {
     // ═══════════════════════════════════════════════════
     // emit_object_file  — главная точка выхода
     // ═══════════════════════════════════════════════════
+    static llvm::TargetMachine* create_target_machine(llvm::Module& mod, const std::string& override_triple) {
+        llvm::InitializeNativeTarget();
+        llvm::InitializeNativeTargetAsmPrinter();
+        llvm::InitializeNativeTargetAsmParser();
+
+        std::string triple = override_triple.empty()
+            ? llvm::sys::getDefaultTargetTriple()
+            : override_triple;
+        mod.setTargetTriple(triple);
+
+        std::string err;
+        const llvm::Target* target =
+            llvm::TargetRegistry::lookupTarget(triple, err);
+        if (!target) {
+            llvm::errs() << "[codegen] Target lookup failed: " << err << "\n";
+            return nullptr;
+        }
+
+        llvm::TargetOptions opt;
+        auto rm = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
+        auto* tm = target->createTargetMachine(triple, "generic", "", opt, rm);
+        mod.setDataLayout(tm->createDataLayout());
+        return tm;
+    }
+
     bool LLVMCodegen::emit_object_file(const std::string& output_path) {
-        // 1. Верифицировать модуль
-        module_->print(llvm::errs(), nullptr);
         std::string err;
         llvm::raw_string_ostream es(err);
         if (llvm::verifyModule(*module_, &es)) {
             std::cerr << "[codegen] Module verification failed:\n" << err << "\n";
             return false;
         }
+        auto* tm = create_target_machine(*module_, target_triple_);
+        if (!tm) return false;
 
-        // 2. Инициализировать таргеты (нативная архитектура)
-        llvm::InitializeNativeTarget();
-        llvm::InitializeNativeTargetAsmPrinter();
-        llvm::InitializeNativeTargetAsmParser();
-
-        std::string target_err;
-        auto triple = llvm::sys::getDefaultTargetTriple();
-        module_->setTargetTriple(triple);
-
-        const llvm::Target* target =
-            llvm::TargetRegistry::lookupTarget(triple, target_err);
-        if (!target) {
-            std::cerr << "[codegen] Target lookup failed: " << target_err << "\n";
-            return false;
-        }
-
-        // 3. Создать TargetMachine
-        llvm::TargetOptions opt;
-        auto rm = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
-        auto tm = target->createTargetMachine(
-            triple, "generic", "", opt, rm);
-        module_->setDataLayout(tm->createDataLayout());
-
-        // 4. Эмитировать объектный файл
         std::error_code ec;
         llvm::raw_fd_ostream dest(output_path, ec, llvm::sys::fs::OF_None);
         if (ec) {
             std::cerr << "[codegen] Cannot open output file: " << ec.message() << "\n";
             return false;
         }
-
         llvm::legacy::PassManager pass;
         if (tm->addPassesToEmitFile(pass, dest, nullptr,
-                            llvm::CodeGenFileType::ObjectFile)) {
+                                    llvm::CodeGenFileType::ObjectFile)) {
             std::cerr << "[codegen] Cannot emit object file\n";
             return false;
         }
         pass.run(*module_);
         dest.flush();
         return true;
+    }
+
+    bool LLVMCodegen::emit_assembly(const std::string& output_path) {
+        std::string err;
+        llvm::raw_string_ostream es(err);
+        if (llvm::verifyModule(*module_, &es)) {
+            std::cerr << "[codegen] Module verification failed:\n" << err << "\n";
+            return false;
+        }
+        auto* tm = create_target_machine(*module_, target_triple_);
+        if (!tm) return false;
+
+        std::error_code ec;
+        llvm::raw_fd_ostream dest(output_path, ec, llvm::sys::fs::OF_None);
+        if (ec) {
+            std::cerr << "[codegen] Cannot open output file: " << ec.message() << "\n";
+            return false;
+        }
+        llvm::legacy::PassManager pass;
+        if (tm->addPassesToEmitFile(pass, dest, nullptr,
+                                    llvm::CodeGenFileType::AssemblyFile)) {
+            std::cerr << "[codegen] Cannot emit assembly\n";
+            return false;
+        }
+        pass.run(*module_);
+        dest.flush();
+        return true;
+    }
+
+    bool LLVMCodegen::emit_llvm_ir(const std::string& output_path) {
+        std::error_code ec;
+        llvm::raw_fd_ostream out(output_path, ec, llvm::sys::fs::OF_None);
+        if (ec) {
+            std::cerr << "[codegen] Cannot open file: " << ec.message() << "\n";
+            return false;
+        }
+        module_->print(out, nullptr);
+        return true;
+    }
+
+    void LLVMCodegen::dump_ir() {
+        module_->print(llvm::errs(), nullptr);
     }
 
     // ───────────────────────────────────────────────────
@@ -142,7 +183,7 @@ namespace flux {
             return llvm::PointerType::getUnqual(llvm::Type::getInt8Ty(ctx_));
 
         // ── void ─────────────────────────────────────────────
-        if (name == "()")
+        if (name == "void" || name == "()")
             return llvm::Type::getVoidTy(ctx_);
 
         // ── Пользовательский struct/class ────────────────────
@@ -318,22 +359,76 @@ namespace flux {
 
     void LLVMCodegen::visit(VarDecl& n) {
         auto* func = builder_.GetInsertBlock()->getParent();
-        llvm::Type* ty = n.type
-            ? llvm_type(n.type.get())
-            : llvm::Type::getInt64Ty(ctx_); // fallback до вывода типа
+
+        // Определяем тип переменной
+        llvm::Type* ty = nullptr;
+        if (n.type) {
+            ty = llvm_type(n.type.get());
+            if (!ty || ty->isVoidTy()) ty = llvm::Type::getInt64Ty(ctx_);
+        } else if (n.init) {
+            // Вывод типа из инициализатора
+            auto* init_val = load_if_ptr(emit_expr(*n.init));
+            ty = init_val ? init_val->getType() : llvm::Type::getInt64Ty(ctx_);
+            auto* alloca = create_entry_alloca(func, n.name, ty);
+            locals_[n.name] = alloca;
+            if (init_val) builder_.CreateStore(init_val, alloca);
+            last_val_ = alloca;
+            return;
+        } else {
+            ty = llvm::Type::getInt64Ty(ctx_);
+        }
 
         auto* alloca = create_entry_alloca(func, n.name, ty);
         locals_[n.name] = alloca;
 
         if (n.init) {
-            auto* val = emit_expr(*n.init);
-            if (val) builder_.CreateStore(load_if_ptr(val), alloca);
+            if (auto* si = dynamic_cast<StructInitExpr*>(n.init.get())) {
+                // ✅ Struct literal — инициализируем поля напрямую в alloca
+                if (structs_.count(si->type_name)) {
+                    auto& info = structs_[si->type_name];
+                    for (auto& fi : si->fields) {
+                        auto it = std::find(info.field_names.begin(),
+                                            info.field_names.end(), fi.name);
+                        if (it == info.field_names.end()) continue;
+                        size_t idx = it - info.field_names.begin();
+                        auto* gep = builder_.CreateStructGEP(info.type, alloca, idx);
+                        auto* val = load_if_ptr(emit_expr(*fi.value));
+                        auto* field_ty = info.type->getElementType(idx);
+                        if (val && val->getType() != field_ty &&
+                            val->getType()->isIntegerTy() && field_ty->isIntegerTy())
+                            val = builder_.CreateIntCast(val, field_ty, true);
+                        if (val) builder_.CreateStore(val, gep);
+                    }
+                }
+            } else {
+                auto* val = load_if_ptr(emit_expr(*n.init));
+                if (val) {
+                    // ✅ Привести тип инициализатора к типу переменной
+                    if (val->getType() != ty) {
+                        bool v_int = val->getType()->isIntegerTy();
+                        bool t_int = ty->isIntegerTy();
+                        bool v_fp  = val->getType()->isFloatingPointTy();
+                        bool t_fp  = ty->isFloatingPointTy();
+
+                        if (v_int && t_int)
+                            val = builder_.CreateIntCast(val, ty, true);
+                        else if (v_int && t_fp)
+                            val = builder_.CreateSIToFP(val, ty);
+                        else if (v_fp && t_int)
+                            val = builder_.CreateFPToSI(val, ty);
+                        else if (v_fp && t_fp)
+                            val = builder_.CreateFPCast(val, ty);
+                    }
+                    builder_.CreateStore(val, alloca);
+                }
+            }
         }
+
         last_val_ = alloca;
     }
 
-    void LLVMCodegen::visit(ParamDecl&) {}
-    void LLVMCodegen::visit(FieldDecl&) {}
+    void LLVMCodegen::visit(ParamDecl&) {} // !
+    void LLVMCodegen::visit(FieldDecl&) {} // !
 
     // ═══════════════════════════════════════════════════
     // Statements
@@ -373,7 +468,7 @@ namespace flux {
     }
 
 
-    void LLVMCodegen::visit(ExprStmt& n) {
+    void LLVMCodegen::visit(ExprStmt& n) { // !
         n.expr->accept(*this);
     }
 
@@ -481,13 +576,21 @@ namespace flux {
     }
 
     void LLVMCodegen::visit(BreakStmt&) {
-        if (!loop_exit_blocks_.empty())
+        if (!loop_exit_blocks_.empty()) {
             builder_.CreateBr(loop_exit_blocks_.top());
+            auto* func = builder_.GetInsertBlock()->getParent();
+            auto* dead = llvm::BasicBlock::Create(ctx_, "after.break", func);
+            builder_.SetInsertPoint(dead);
+        }
     }
 
     void LLVMCodegen::visit(ContinueStmt&) {
-        if (!loop_cont_blocks_.empty())
+        if (!loop_cont_blocks_.empty()) {
             builder_.CreateBr(loop_cont_blocks_.top());
+            auto* func = builder_.GetInsertBlock()->getParent();
+            auto* dead = llvm::BasicBlock::Create(ctx_, "after.continue", func);
+            builder_.SetInsertPoint(dead);
+        }
     }
 
     // ═══════════════════════════════════════════════════
@@ -583,79 +686,78 @@ namespace flux {
 
     void LLVMCodegen::visit(UnaryExpr& n) {
         using Op = UnaryExpr::Op;
-        auto* func = builder_.GetInsertBlock()->getParent();
 
         switch (n.op) {
-        case Op::Neg: {
-            auto* v = load_if_ptr(emit_expr(*n.operand));
-            last_val_ = v->getType()->isFloatingPointTy()
-                ? builder_.CreateFNeg(v)
-                : builder_.CreateNeg(v);
-            break;
-        }
-        case Op::Not:
-            last_val_ = builder_.CreateNot(
-                load_if_ptr(emit_expr(*n.operand)));
-            break;
-        case Op::BitNot:
-            last_val_ = builder_.CreateNot(
-                load_if_ptr(emit_expr(*n.operand)));
-            break;
-        case Op::Deref: {
-            auto* ptr = load_if_ptr(emit_expr(*n.operand));
-            llvm::Type* elem_ty = nullptr;
-            if (auto* ai = llvm::dyn_cast<llvm::AllocaInst>(ptr))
-                elem_ty = ai->getAllocatedType();
-            else
-                elem_ty = llvm::Type::getInt64Ty(ctx_); // fallback
-            auto* loaded = builder_.CreateLoad(elem_ty, ptr);
-            last_val_ = loaded;
-            break;
-        }
-        case Op::AddrOf: {
-            n.operand->accept(*this);
-            break;
-        }
-        case Op::PreInc: {
-            n.operand->accept(*this);
-            auto* alloca = last_val_;
-            auto* ty = llvm::cast<llvm::AllocaInst>(alloca)->getAllocatedType();
-            auto* v = builder_.CreateLoad(ty, alloca);
-            auto* inc = builder_.CreateAdd(v, llvm::ConstantInt::get(ty, 1));
-            builder_.CreateStore(inc, alloca);
-            last_val_ = inc;
-            break;
-        }
-        case Op::PreDec: {
-            n.operand->accept(*this);
-            auto* alloca = last_val_;
-            auto* ty = llvm::cast<llvm::AllocaInst>(alloca)->getAllocatedType();
-            auto* v = builder_.CreateLoad(ty, alloca);
-            auto* dec = builder_.CreateSub(v, llvm::ConstantInt::get(ty, 1));
-            builder_.CreateStore(dec, alloca);
-            last_val_ = dec;
-            break;
-        }
-        case Op::PostInc: {
-            n.operand->accept(*this);
-            auto* alloca = last_val_;
-            auto* ty = llvm::cast<llvm::AllocaInst>(alloca)->getAllocatedType();
-            auto* v = builder_.CreateLoad(ty, alloca);
-            builder_.CreateStore(
-                builder_.CreateAdd(v, llvm::ConstantInt::get(ty, 1)), alloca);
-            last_val_ = v; // возвращаем старое значение
-            break;
-        }
-        case Op::PostDec: {
-            n.operand->accept(*this);
-            auto* alloca = last_val_;
-            auto* ty = llvm::cast<llvm::AllocaInst>(alloca)->getAllocatedType();
-            auto* v = builder_.CreateLoad(ty, alloca);
-            builder_.CreateStore(
-                builder_.CreateSub(v, llvm::ConstantInt::get(ty, 1)), alloca);
-            last_val_ = v;
-            break;
-        }
+            case Op::Neg: {
+                auto* v = load_if_ptr(emit_expr(*n.operand));
+                last_val_ = v->getType()->isFloatingPointTy()
+                    ? builder_.CreateFNeg(v)
+                    : builder_.CreateNeg(v);
+                break;
+            }
+            case Op::Not:
+                last_val_ = builder_.CreateNot(
+                    load_if_ptr(emit_expr(*n.operand)));
+                break;
+            case Op::BitNot:
+                last_val_ = builder_.CreateNot(
+                    load_if_ptr(emit_expr(*n.operand)));
+                break;
+            case Op::Deref: {
+                auto* ptr = load_if_ptr(emit_expr(*n.operand));
+                llvm::Type* elem_ty = nullptr;
+                if (auto* ai = llvm::dyn_cast<llvm::AllocaInst>(ptr))
+                    elem_ty = ai->getAllocatedType();
+                else
+                    elem_ty = llvm::Type::getInt64Ty(ctx_); // fallback
+                auto* loaded = builder_.CreateLoad(elem_ty, ptr);
+                last_val_ = loaded;
+                break;
+            }
+            case Op::AddrOf: {
+                n.operand->accept(*this);
+                break;
+            }
+            case Op::PreInc: {
+                n.operand->accept(*this);
+                auto* alloca = last_val_;
+                auto* ty = llvm::cast<llvm::AllocaInst>(alloca)->getAllocatedType();
+                auto* v = builder_.CreateLoad(ty, alloca);
+                auto* inc = builder_.CreateAdd(v, llvm::ConstantInt::get(ty, 1));
+                builder_.CreateStore(inc, alloca);
+                last_val_ = inc;
+                break;
+            }
+            case Op::PreDec: {
+                n.operand->accept(*this);
+                auto* alloca = last_val_;
+                auto* ty = llvm::cast<llvm::AllocaInst>(alloca)->getAllocatedType();
+                auto* v = builder_.CreateLoad(ty, alloca);
+                auto* dec = builder_.CreateSub(v, llvm::ConstantInt::get(ty, 1));
+                builder_.CreateStore(dec, alloca);
+                last_val_ = dec;
+                break;
+            }
+            case Op::PostInc: {
+                n.operand->accept(*this);
+                auto* alloca = last_val_;
+                auto* ty = llvm::cast<llvm::AllocaInst>(alloca)->getAllocatedType();
+                auto* v = builder_.CreateLoad(ty, alloca);
+                builder_.CreateStore(
+                    builder_.CreateAdd(v, llvm::ConstantInt::get(ty, 1)), alloca);
+                last_val_ = v; // возвращаем старое значение
+                break;
+            }
+            case Op::PostDec: {
+                n.operand->accept(*this);
+                auto* alloca = last_val_;
+                auto* ty = llvm::cast<llvm::AllocaInst>(alloca)->getAllocatedType();
+                auto* v = builder_.CreateLoad(ty, alloca);
+                builder_.CreateStore(
+                    builder_.CreateSub(v, llvm::ConstantInt::get(ty, 1)), alloca);
+                last_val_ = v;
+                break;
+            }
         }
     }
 
@@ -824,6 +926,15 @@ namespace flux {
             size_t idx = it - info.field_names.begin();
             auto* gep = builder_.CreateStructGEP(info.type, alloca, idx);
             auto* val = load_if_ptr(emit_expr(*fi.value));
+            auto* field_ty = info.type->getElementType(idx);
+            if (val && val->getType() != field_ty) {
+                if (val->getType()->isIntegerTy() && field_ty->isIntegerTy())
+                    val = builder_.CreateIntCast(val, field_ty, true);
+                else if (val->getType()->isIntegerTy() && field_ty->isFloatingPointTy())
+                    val = builder_.CreateSIToFP(val, field_ty);
+                else if (val->getType()->isFloatingPointTy() && field_ty->isIntegerTy())
+                    val = builder_.CreateFPToSI(val, field_ty);
+            }
             builder_.CreateStore(val, gep);
         }
         last_val_ = alloca;
@@ -833,40 +944,118 @@ namespace flux {
         last_val_ = self_ptr_;
     }
 
-    // Match — простой switch по i64/i32
     void LLVMCodegen::visit(MatchExpr& n) {
         auto* func  = builder_.GetInsertBlock()->getParent();
         auto* subj  = load_if_ptr(emit_expr(*n.subject));
         auto* merge = llvm::BasicBlock::Create(ctx_, "match.end", func);
 
-        // Тип результата — определяем по первому arm (упрощение)
-        llvm::PHINode* phi = nullptr;
-
-        std::vector<std::pair<llvm::ConstantInt*, llvm::BasicBlock*>> cases;
         llvm::BasicBlock* default_bb = merge;
 
-        std::vector<llvm::Value*> arm_vals;
         std::vector<llvm::BasicBlock*> arm_bbs;
-
-        for (auto& arm : n.arms) {
-            auto* arm_bb = llvm::BasicBlock::Create(ctx_, "match.arm", func);
+        for (size_t i = 0; i < n.arms.size(); ++i) {
+            auto* arm_bb = llvm::BasicBlock::Create(
+                ctx_, "match.arm" + (i ? std::to_string(i) : ""), func);
             arm_bbs.push_back(arm_bb);
-            builder_.SetInsertPoint(arm_bb);
-            arm->body->accept(*this);
-            arm_vals.push_back(last_val_ ? load_if_ptr(last_val_) : nullptr);
+            if (dynamic_cast<WildcardPattern*>(n.arms[i]->pattern.get()))
+                default_bb = arm_bb;
+        }
+
+        bool is_int = subj && subj->getType()->isIntegerTy();
+        bool is_str = subj && subj->getType()->isPointerTy();
+
+        if (is_int) {
+            // ── Integer / bool → llvm SwitchInst ──────────────
+            auto* sw = builder_.CreateSwitch(subj, default_bb, n.arms.size());
+
+            for (size_t i = 0; i < n.arms.size(); ++i) {
+                auto* arm = n.arms[i].get();
+                if (dynamic_cast<WildcardPattern*>(arm->pattern.get()))
+                    continue;
+                if (auto* lp = dynamic_cast<LiteralPattern*>(arm->pattern.get())) {
+                    auto* lit_val = load_if_ptr(emit_expr(*lp->value));
+                    auto* case_val = llvm::dyn_cast<llvm::ConstantInt>(lit_val);
+                    if (case_val && case_val->getType() != subj->getType()) {
+                        case_val = llvm::ConstantInt::get(
+                            llvm::cast<llvm::IntegerType>(subj->getType()),
+                            case_val->getSExtValue(),
+                            /*isSigned=*/true);
+                    }
+                    if (case_val)
+                        sw->addCase(case_val, arm_bbs[i]);
+                }
+            }
+
+        } else {
+            // ── String / float → цепочка if-else ──────────────
+            llvm::Function* strcmp_fn = module_->getFunction("strcmp");
+            if (!strcmp_fn && is_str) {
+                auto* i8ptr = llvm::PointerType::getUnqual(
+                    llvm::Type::getInt8Ty(ctx_));
+                auto* ft = llvm::FunctionType::get(
+                    llvm::Type::getInt32Ty(ctx_), {i8ptr, i8ptr}, false);
+                strcmp_fn = llvm::Function::Create(
+                    ft, llvm::Function::ExternalLinkage, "strcmp", *module_);
+            }
+
+            llvm::BasicBlock* check_bb = builder_.GetInsertBlock();
+            for (size_t i = 0; i < n.arms.size(); ++i) {
+                auto* arm = n.arms[i].get();
+                if (dynamic_cast<WildcardPattern*>(arm->pattern.get()))
+                    continue;
+
+                bool is_last_non_wild = true;
+                for (size_t j = i + 1; j < n.arms.size(); ++j) {
+                    if (!dynamic_cast<WildcardPattern*>(n.arms[j]->pattern.get())) {
+                        is_last_non_wild = false;
+                        break;
+                    }
+                }
+                auto* next_bb = is_last_non_wild
+                    ? default_bb
+                    : llvm::BasicBlock::Create(ctx_, "match.check", func);
+
+                builder_.SetInsertPoint(check_bb);
+                llvm::Value* cond = nullptr;
+
+                if (auto* lp = dynamic_cast<LiteralPattern*>(arm->pattern.get())) {
+                    auto* pat_val = load_if_ptr(emit_expr(*lp->value));
+                    if (is_str && strcmp_fn) {
+                        auto* r = builder_.CreateCall(strcmp_fn, {subj, pat_val});
+                        cond = builder_.CreateICmpEQ(
+                            r, llvm::ConstantInt::get(
+                                llvm::Type::getInt32Ty(ctx_), 0));
+                    } else {
+                        cond = builder_.CreateFCmpOEQ(subj, pat_val);
+                    }
+                }
+
+                if (cond)
+                    builder_.CreateCondBr(cond, arm_bbs[i], next_bb);
+                else
+                    builder_.CreateBr(default_bb);
+
+                check_bb = next_bb;
+            }
+
+            builder_.SetInsertPoint(check_bb);
+            if (!builder_.GetInsertBlock()->getTerminator())
+                builder_.CreateBr(default_bb);
+        }
+
+        // ── Тела arm-блоков ───────────────────────────────────
+        for (size_t i = 0; i < n.arms.size(); ++i) {
+            builder_.SetInsertPoint(arm_bbs[i]);
+            if (n.arms[i]->body)
+                n.arms[i]->body->accept(*this);
             if (!builder_.GetInsertBlock()->getTerminator())
                 builder_.CreateBr(merge);
         }
 
-        // Строим switch перед первым arm
-        auto* pre = llvm::BasicBlock::Create(ctx_, "match.sw");
-        // Вставляем pre перед arm_bbs[0]
-        // Фактически: переупорядочить нельзя без refactor, поэтому сделаем jump
-        // Upd: проще — пере-эмитируем в правильном порядке (нужен refactor, но
-        // для базовой реализации — оставляем заглушку)
-        last_val_ = arm_vals.empty() ? nullptr : arm_vals[0];
         builder_.SetInsertPoint(merge);
+        last_val_ = nullptr;
     }
+
+
 
     void LLVMCodegen::visit(MatchArm& n) {
         if (n.body) n.body->accept(*this);

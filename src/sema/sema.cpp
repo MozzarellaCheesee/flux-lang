@@ -457,26 +457,22 @@ namespace flux {
 
     // ── Expressions ──────────────────────────────────────────
     void SemanticAnalyzer::visit(IdentExpr& node) {
-        // SPECIAL: self знает тип из контекста метода
         if (node.name == "self" && current_func_ && !current_impl_type_.empty()) {
             last_type_ = current_impl_type_;
             return;
         }
 
-        // SPECIAL: other тоже может быть параметром
         std::string t = lookup_var(node.name);
         if (!t.empty()) {
             last_type_ = t;
             return;
         }
 
-        // builtin функции
         if (is_builtin(node.name)) {
             last_type_ = "builtin";
             return;
         }
 
-        // ошибка
         diag_.emit(DiagLevel::Error, node.loc, "Undefined '" + node.name + "'");
         last_type_ = "unknown";
     }
@@ -618,26 +614,19 @@ namespace flux {
     }
 
     void SemanticAnalyzer::visit(CallExpr& node) {
-        // Вычисляем типы аргументов
         std::vector<std::string> arg_types;
         for (auto& arg : node.args) {
             arg_types.push_back(eval_type(*arg));
-        }
-        std::string debug = "CallExpr: '" + node.callee + "'";
-        for (const auto& arg : node.args) {
-            debug += " [" + (arg ? eval_type(*arg) : "null") + "]";
         }
         size_t dot_pos = node.callee.find('.');
         if (dot_pos != std::string::npos) {
             std::string type_name = node.callee.substr(0, dot_pos);
             std::string method_name = node.callee.substr(dot_pos + 1);
 
-            // Ищем метод с owner == type_name
             auto it = func_table_.find(method_name);
             if (it != func_table_.end()) {
                 for (const auto& sig : it->second) {
                     if (sig.owner == type_name) {
-                        // Проверяем видимость
                         if (!sig.is_pub) {
                             diag_.emit(DiagLevel::Error, node.loc,
                                 "Static method '" + method_name + "' of '" + type_name + "' is private");
@@ -655,7 +644,7 @@ namespace flux {
                             }
                             if (match) {
                                 last_type_ = sig.return_type;
-                                return;  // ✅ НАШЛИ Point.new()!
+                                return; 
 
                             }
                         }
@@ -670,7 +659,7 @@ namespace flux {
         }
 
         if (is_builtin(node.callee)) {
-            last_type_ = "()"; // println → unit
+            last_type_ = "()";
             return;
         }
 
@@ -728,13 +717,20 @@ namespace flux {
 
         // Обычная функция — разрешаем перегрузку по типам аргументов
         const FuncSignature* sig = resolve_overload(node.callee, arg_types, node.loc);
-        if (sig && !sig->owner.empty() && !sig->is_pub) {
-            // Метод принадлежит типу — вне его контекста недоступен
-            if (current_impl_type_ != sig->owner) {
-                diag_.emit(DiagLevel::Error, node.loc,
-                    "Function '" + node.callee + "' is a private method of '" +
-                    sig->owner + "' and cannot be called directly from outside");
+        if (sig) {
+            if (!sig->owner.empty()) {
+                // Метод impl — нельзя вызывать как обычную функцию
+                if (current_impl_type_ != sig->owner) {
+                    // Снаружи impl — только через оператор точки!
+                    diag_.emit(DiagLevel::Error, node.loc,
+                        "Method '" + node.callee + "' not found ");
+                    last_type_ = "unknown";
+                    return;
+                }
             }
+            last_type_ = sig->return_type;
+        } else {
+            last_type_ = "unknown";
         }
         last_type_ = sig ? sig->return_type : "unknown";
     }
@@ -764,8 +760,14 @@ namespace flux {
                             }
                         }
                         if (match) {
+                            if (!sig.is_pub && current_impl_type_ != sig.owner) {
+                                diag_.emit(DiagLevel::Error, node.loc,
+                                    "Method '" + node.method + "' of '" + sig.owner + "' is private");
+                                last_type_ = "unknown";
+                                return;
+                            }
                             last_type_ = sig.return_type;
-                            return;  // ✅ Point!
+                            return;
                         }
                         
                     }

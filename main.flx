@@ -18,10 +18,15 @@ impl Point {
             return other;
         }
     }
+
+    pub fnc foo(self) -> int32 {
+        return self.x + self.y;
+    }
 }
 fnc main() -> int32 {
     let p  = Point { x: 1, y: 4 };
     let p2 = Point { x: 2, y: 6 };
     let max_p = p.max(p2);
+    let d = p.foo();
     return 0;
 }

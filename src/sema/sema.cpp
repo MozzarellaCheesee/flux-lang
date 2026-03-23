@@ -70,9 +70,6 @@ namespace flux {
         sig.is_pub      = decl.is_pub;
         sig.owner       = owner;
 
-        // for (auto& param : decl.params)
-        //     sig.param_types.push_back(type_node_to_string(param->type.get()));
-
         for (auto& param : decl.params) {
             std::string ptype;
             if (param->name == "self" && !param->type) {
@@ -473,6 +470,11 @@ namespace flux {
             return;
         }
 
+        if (type_table_.count(node.name)) {
+            last_type_ = node.name;
+            return;
+        }
+
         diag_.emit(DiagLevel::Error, node.loc, "Undefined '" + node.name + "'");
         last_type_ = "unknown";
     }
@@ -741,43 +743,7 @@ namespace flux {
 
         if (node.receiver) receiver_type = eval_type(*node.receiver);
         for (auto& arg : node.args) if (arg) arg_types.push_back(eval_type(*arg));
-
-        auto it = func_table_.find(node.method);
-        if (it != func_table_.end()) {
-            for (const auto& sig : it->second) {
-                if (sig.owner == receiver_type) {
-                    // full_args = [receiver] + args
-                    std::vector<std::string> full_args{receiver_type};
-                    full_args.insert(full_args.end(), arg_types.begin(), arg_types.end());
-                    // Совпадение сигнатуры
-                    if (sig.param_types.size() == full_args.size()) {
-                        bool match = true;
-                        for (size_t i = 0; i < full_args.size(); ++i) {
-                            bool compat = is_assign_compatible(full_args[i], sig.param_types[i]);
-                            if (!is_assign_compatible(full_args[i], sig.param_types[i])) {
-                                match = false;
-                                break;
-                            }
-                        }
-                        if (match) {
-                            if (!sig.is_pub && current_impl_type_ != sig.owner) {
-                                diag_.emit(DiagLevel::Error, node.loc,
-                                    "Method '" + node.method + "' of '" + sig.owner + "' is private");
-                                last_type_ = "unknown";
-                                return;
-                            }
-                            last_type_ = sig.return_type;
-                            return;
-                        }
-                        
-                    }
-                }
-            }
-        }
-
-        diag_.emit(DiagLevel::Error, node.loc, "No method '" + node.method + "' for '" + receiver_type + "'");
-        last_type_ = "unknown";
-
+        
         if (node.method == "to_string") { last_type_ = "string";  return; }
         if (node.method == "len")       { last_type_ = "usize_t"; return; }
         if (node.method == "push")      { last_type_ = "()";      return; }
@@ -785,6 +751,49 @@ namespace flux {
         if (node.method == "is_empty")  { last_type_ = "bool";    return; }
         if (node.method == "contains")  { last_type_ = "bool";    return; }
 
+        auto it = func_table_.find(node.method);
+        if (it != func_table_.end()) {
+            for (const auto& sig : it->second) {
+                if (sig.owner != receiver_type) continue;
+
+                std::vector<std::string> full_args{receiver_type};
+                full_args.insert(full_args.end(), arg_types.begin(), arg_types.end());
+
+                // Попытка сопоставить как метод с self
+                if (sig.param_types.size() == full_args.size()) {
+                    bool match = true;
+                    for (size_t i = 0; i < full_args.size(); ++i) {
+                        if (!is_assign_compatible(full_args[i], sig.param_types[i])) 
+                            { match = false; break; }
+                    }
+                    if (match) {
+                        if (!sig.is_pub && current_impl_type_ != sig.owner) 
+                            diag_.emit(DiagLevel::Error, node.loc,
+                                "Method '" + node.method + "' of '" + sig.owner + "' is private");
+                        last_type_ = sig.return_type;
+                        return;
+                    }
+                    
+                }
+
+                // Fallback Попытка как СТАТИЧЕСКИЙ метод (без self)
+                if (sig.param_types.size() == arg_types.size()) {
+                    bool match = true;
+                    for (size_t i = 0; i < arg_types.size(); ++i)
+                        if (!is_assign_compatible(arg_types[i], sig.param_types[i]))
+                            { match = false; break; }
+                    if (match) {
+                        if (!sig.is_pub && current_impl_type_ != sig.owner)
+                            diag_.emit(DiagLevel::Error, node.loc,
+                                "Static method '" + node.method + "' of '" + sig.owner + "' is private");
+                        last_type_ = sig.return_type;
+                        return;
+                    }
+                }
+            }
+        }
+
+        diag_.emit(DiagLevel::Error, node.loc, "No method '" + node.method + "' for '" + receiver_type + "'");
         last_type_ = "unknown";
     }
 
@@ -923,6 +932,16 @@ namespace flux {
             if (field.name == node.field) {
                 last_type_ = field.type;
                 return;
+            }
+        }
+
+        auto mit = func_table_.find(node.field);
+        if (mit != func_table_.end()) {
+            for (const auto& sig : mit->second) {
+                if (sig.owner == obj_type) {
+                    last_type_ = sig.return_type;
+                    return;
+                }
             }
         }
 

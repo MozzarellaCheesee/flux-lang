@@ -1,0 +1,49 @@
+struct Point {
+    x: int32,
+    y: int32
+}
+
+impl Point {
+    pub fnc new(x: int32, y: int32) -> Point {
+        return Point {
+            x: x,
+            y: y,
+        };
+    }
+
+    pub fnc max(self, other: Point) -> Point {
+        if (self.foo() > other.foo()) {
+            return self;
+        } else {
+            return other;
+        }
+    }
+
+    fnc foo(self) -> int32 {
+        return self.x + self.y;
+    }
+}
+
+class People {
+    name: &str;
+    age: int32;
+
+    pub fnc new(name: &str, age: int32) -> People {
+        return People {
+            name: name,
+            age: age,
+        };
+    }
+
+    pub fnc printname(self) -> () {
+        println(self.name);
+    }
+}
+
+
+fnc main() -> int32 {
+    let animal = People.new("John", 16);
+    println("hello");
+    animal.printname();
+    return 0;
+}

@@ -157,7 +157,9 @@ namespace flux {
         auto name   = std::string(expect(TokenKind::IDENT, "field name").lexeme);
         expect(TokenKind::COLON, ":");
         auto type   = parse_type();
-        match(TokenKind::COMMA); // завершающая запятая
+        // match(TokenKind::COMMA); // завершающая запятая
+        if (!match(TokenKind::COMMA))
+            match(TokenKind::SEMICOLON);
 
         auto node = std::make_unique<FieldDecl>(is_pub, name, std::move(type));
         node->loc = loc;
@@ -194,10 +196,11 @@ namespace flux {
 
         while (!check(TokenKind::RBRACE) && !check(TokenKind::END_OF_FILE)) {
             bool member_pub = match(TokenKind::KW_PUB);
-            if (check(TokenKind::KW_FNC))
+            if (check(TokenKind::KW_FNC)) {
                 node->methods.push_back(parse_func_decl(member_pub));
-            else
+            } else {
                 node->fields.push_back(parse_field_decl());
+            }
         }
         expect(TokenKind::RBRACE, "}");
         return node;

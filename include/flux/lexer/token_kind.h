@@ -5,7 +5,7 @@ namespace flux {
         KW_FNC, KW_LET, KW_RETURN, KW_FOR, KW_WHILE,
         KW_IF, KW_ELSE, KW_CONTINUE, KW_BREAK,
         KW_TRUE, KW_FALSE, KW_MATCH, KW_PUB,
-        KW_STRUCT, KW_CLASS, KW_IMPL, KW_SELF,
+        KW_STRUCT, KW_CLASS, KW_IMPL, KW_SELF, KW_EXTERN,
 
         // ── Встроенные типы ─────────────────────────────
         KW_BOOL,
@@ -83,8 +83,9 @@ namespace flux {
         
 
         // ── Препроцессор ────────────────────────────────
-        PP_IMPORT,   // #import
-
+        PP_IMPORT,       // #import "path"
+        PP_IMPORT_SYS,   // #import <module>
+        
         // ── Служебные ───────────────────────────────────
         END_OF_FILE, 
         HASH,        // #

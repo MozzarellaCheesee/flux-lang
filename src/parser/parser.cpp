@@ -58,7 +58,14 @@ namespace flux {
         // pub — необязательный модификатор видимости
         bool is_pub = match(TokenKind::KW_PUB);
 
-        if (check(TokenKind::KW_FNC))    return parse_func_decl(is_pub);
+        // extern fnc — объявление без тела (реализация в C++ runtime)
+        bool is_extern = false;
+        if (check(TokenKind::KW_EXTERN)) {
+            consume();
+            is_extern = true;
+        }
+
+        if (check(TokenKind::KW_FNC))    return parse_func_decl(is_pub, is_extern);
         if (check(TokenKind::KW_STRUCT)) return parse_struct_decl(is_pub);
         if (check(TokenKind::KW_CLASS))  return parse_class_decl(is_pub);
 
@@ -68,10 +75,16 @@ namespace flux {
             return parse_impl_decl();
         }
 
-        // #import "path" — пропускаем, препроцессор обработает отдельно
+        // #import "path" — пропускаем, препроцессор обработал заранее
         if (check(TokenKind::PP_IMPORT)) {
             consume();
             expect(TokenKind::LIT_STRING, "import path");
+            return nullptr;
+        }
+
+        // #import <module> — пропускаем, препроцессор обработал заранее
+        if (check(TokenKind::PP_IMPORT_SYS)) {
+            consume();
             return nullptr;
         }
 
@@ -82,7 +95,8 @@ namespace flux {
     }
 
     // fnc name(params) -> ReturnType { body }
-    std::unique_ptr<FuncDecl> Parser::parse_func_decl(bool is_pub) { // Парсинг объявления функции
+    // extern fnc name(params) -> ReturnType;
+    std::unique_ptr<FuncDecl> Parser::parse_func_decl(bool is_pub, bool is_extern) { // Парсинг объявления функции
         auto loc = current().loc;
         expect(TokenKind::KW_FNC, "fnc");
         auto name = std::string(expect(TokenKind::IDENT, "function name").lexeme);
@@ -123,11 +137,17 @@ namespace flux {
         }
         expect(TokenKind::RPAREN, ")");
         expect(TokenKind::ARROW, "->");
-        auto ret  = parse_type();
-        auto body = parse_block();
+        auto ret = parse_type();
+
+        std::unique_ptr<BlockStmt> body;
+        if (is_extern) {
+            match(TokenKind::SEMICOLON); // ; после extern fnc необязательная
+        } else {
+            body = parse_block();
+        }
 
         auto node = std::make_unique<FuncDecl>(
-            is_pub, has_self, name,
+            is_pub, is_extern, has_self, name,
             std::move(params), std::move(ret), std::move(body));
         node->loc = loc;
         return node;

@@ -173,6 +173,67 @@ std::string func_signature(const FuncSignature& sig) {
     return s + ") -> " + sig.return_type;
 }
 
+// ── Вспомогательная: слово под курсором ──────────────────────────────────────
+
+// Extract identifier word at 1-based (line, col). col points into or adjacent to the word.
+std::string word_at_cursor(const std::string& source, uint32_t line, uint32_t col) {
+    auto lines = split_lines(source);
+    if (line == 0 || line > static_cast<uint32_t>(lines.size())) return "";
+    const auto& l = lines[line - 1];
+    size_t ci = col > 0 ? col - 1 : 0;
+    if (ci >= l.size()) ci = l.size() > 0 ? l.size() - 1 : 0;
+
+    size_t start = ci;
+    while (start > 0 && (std::isalnum(static_cast<unsigned char>(l[start-1])) || l[start-1] == '_'))
+        --start;
+    size_t end = ci;
+    while (end < l.size() && (std::isalnum(static_cast<unsigned char>(l[end])) || l[end] == '_'))
+        ++end;
+
+    if (start == end) return "";
+    return l.substr(start, end - start);
+}
+
+// Рекурсивный поиск VarDecl с именем `word` в блоке (до cursor_line)
+DefinitionResult find_var_def_in_block(BlockStmt* block,
+                                        const std::string& word,
+                                        uint32_t cursor_line,
+                                        const std::string& fallback_path) {
+    if (!block) return {};
+    for (auto& stmt : block->stmts) {
+        if (!stmt || stmt->loc.line >= cursor_line) continue;
+        if (auto* vd = dynamic_cast<VarDecl*>(stmt.get())) {
+            if (vd->name == word) {
+                std::string fp = vd->loc.filepath.empty() ? fallback_path : vd->loc.filepath;
+                return {fp, vd->loc.line, vd->loc.col};
+            }
+        }
+        if (auto* ifs = dynamic_cast<IfStmt*>(stmt.get())) {
+            auto r = find_var_def_in_block(ifs->then_block.get(), word, cursor_line, fallback_path);
+            if (!r.filepath.empty()) return r;
+            if (auto* eb = dynamic_cast<BlockStmt*>(ifs->else_branch.get())) {
+                r = find_var_def_in_block(eb, word, cursor_line, fallback_path);
+                if (!r.filepath.empty()) return r;
+            }
+        }
+        if (auto* fs = dynamic_cast<ForStmt*>(stmt.get())) {
+            if (auto* vd = dynamic_cast<VarDecl*>(fs->init.get())) {
+                if (vd->name == word) {
+                    std::string fp = vd->loc.filepath.empty() ? fallback_path : vd->loc.filepath;
+                    return {fp, vd->loc.line, vd->loc.col};
+                }
+            }
+            auto r = find_var_def_in_block(fs->body.get(), word, cursor_line, fallback_path);
+            if (!r.filepath.empty()) return r;
+        }
+        if (auto* ws = dynamic_cast<WhileStmt*>(stmt.get())) {
+            auto r = find_var_def_in_block(ws->body.get(), word, cursor_line, fallback_path);
+            if (!r.filepath.empty()) return r;
+        }
+    }
+    return {};
+}
+
 } // anonymous namespace
 
 // ── Публичный API ─────────────────────────────────────────────────────────────
@@ -267,6 +328,137 @@ std::vector<CompletionItem> compute_completions(
     }
 
     return items;
+}
+
+// ── compute_hover ─────────────────────────────────────────────────────────────
+
+HoverResult compute_hover(const std::string& source, const std::string& filepath,
+                           uint32_t line, uint32_t col) {
+    std::string word = word_at_cursor(source, line, col);
+    if (word.empty()) return {};
+
+    // Run pipeline (errors are silently ignored)
+    DiagEngine diag;
+    Lexer lexer(source, filepath, diag);
+    auto tokens = lexer.tokenize();
+    Preprocessor pp(diag, std::filesystem::path(filepath).parent_path());
+    auto processed = pp.process(tokens, std::filesystem::path(filepath));
+    Parser parser(std::move(processed), diag);
+    auto program = parser.parse_program();
+    SemanticAnalyzer sema(diag);
+    if (program) sema.analyze(*program);
+
+    const auto& ftable = sema.func_table();
+    const auto& ttable = sema.type_table();
+
+    // Check functions
+    auto fit = ftable.find(word);
+    if (fit != ftable.end() && !fit->second.empty()) {
+        auto& sig = fit->second[0];
+        std::string md = "```flux\n" + func_signature(sig) + "\n```";
+        if (fit->second.size() > 1)
+            md += "\n\n*+" + std::to_string(fit->second.size() - 1) + " overload(s)*";
+        return {md};
+    }
+
+    // Check types
+    auto tit = ttable.find(word);
+    if (tit != ttable.end()) {
+        const auto& ti = tit->second;
+        std::string kind_str = ti.is_class ? "class" : "struct";
+        std::string md = "```flux\n" + kind_str + " " + word + " {\n";
+        for (auto& f : ti.fields)
+            md += "    " + f.name + ": " + f.type + ",\n";
+        md += "}\n```";
+        return {md};
+    }
+
+    // Check local vars at this position
+    if (program) {
+        auto locals = collect_local_vars(program.get(), line);
+        auto vit = locals.find(word);
+        if (vit != locals.end())
+            return {"```flux\n" + word + ": " + vit->second + "\n```"};
+    }
+
+    // Built-in types
+    static const std::unordered_map<std::string, std::string> builtins = {
+        {"int32",  "32-bit signed integer"},
+        {"int64",  "64-bit signed integer"},
+        {"int8",   "8-bit signed integer"},
+        {"int16",  "16-bit signed integer"},
+        {"int128", "128-bit signed integer"},
+        {"uint32", "32-bit unsigned integer"},
+        {"uint64", "64-bit unsigned integer"},
+        {"uint8",  "8-bit unsigned integer"},
+        {"uint16", "16-bit unsigned integer"},
+        {"uint128","128-bit unsigned integer"},
+        {"float",  "32-bit float"},
+        {"double", "64-bit float"},
+        {"bool",   "boolean"},
+        {"str",    "string slice"},
+        {"string", "owned string"},
+        {"isize_t","pointer-sized signed integer"},
+        {"usize_t","pointer-sized unsigned integer"},
+    };
+    auto bit = builtins.find(word);
+    if (bit != builtins.end())
+        return {"**" + word + "** — " + bit->second};
+
+    return {};
+}
+
+// ── compute_definition ────────────────────────────────────────────────────────
+
+DefinitionResult compute_definition(const std::string& source, const std::string& filepath,
+                                     uint32_t line, uint32_t col) {
+    std::string word = word_at_cursor(source, line, col);
+    if (word.empty()) return {};
+
+    DiagEngine diag;
+    Lexer lexer(source, filepath, diag);
+    auto tokens = lexer.tokenize();
+    Preprocessor pp(diag, std::filesystem::path(filepath).parent_path());
+    auto processed = pp.process(tokens, std::filesystem::path(filepath));
+    Parser parser(std::move(processed), diag);
+    auto program = parser.parse_program();
+    if (!program) return {};
+
+    auto loc_or = [&](const SourceLocation& loc) -> DefinitionResult {
+        std::string fp = loc.filepath.empty() ? filepath : loc.filepath;
+        return {fp, loc.line, loc.col};
+    };
+
+    // Обход всех деклараций верхнего уровня
+    for (auto& d : program->decls) {
+        if (auto* fd = dynamic_cast<FuncDecl*>(d.get())) {
+            if (fd->name == word) return loc_or(fd->loc);
+        }
+        if (auto* sd = dynamic_cast<StructDecl*>(d.get())) {
+            if (sd->name == word) return loc_or(sd->loc);
+        }
+        if (auto* cd = dynamic_cast<ClassDecl*>(d.get())) {
+            if (cd->name == word) return loc_or(cd->loc);
+            for (auto& m : cd->methods)
+                if (m->name == word) return loc_or(m->loc);
+        }
+        if (auto* impl = dynamic_cast<ImplDecl*>(d.get())) {
+            for (auto& m : impl->methods)
+                if (m->name == word) return loc_or(m->loc);
+        }
+    }
+
+    // Локальные переменные и параметры в объемлющей функции
+    auto [func, owner] = find_enclosing_func(program.get(), line);
+    if (func) {
+        for (auto& p : func->params)
+            if (p->name == word) return loc_or(p->loc);
+        if (func->has_self && word == "self") return loc_or(func->loc);
+        auto r = find_var_def_in_block(func->body.get(), word, line, filepath);
+        if (!r.filepath.empty()) return r;
+    }
+
+    return {};
 }
 
 } // namespace flux

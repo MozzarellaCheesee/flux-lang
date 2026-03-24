@@ -1,5 +1,6 @@
 #include "flux/preprocessor/preprocessor.h"
 #include "flux/lexer/lexer.h"
+#include "flux/stdlib/stdlib_modules.h"
 
 #include <fstream>
 #include <sstream>
@@ -14,6 +15,36 @@ namespace flux {
 
         for (size_t i = 0; i < tokens.size(); ++i) {
             const Token& tok = tokens[i];
+
+            // ── #import <module> — встроенный stdlib ─────────────────────────
+            if (tok.kind == TokenKind::PP_IMPORT_SYS) {
+                std::string module_name = std::string(tok.lexeme);
+                std::string key = "__stdlib_" + module_name;
+
+                if (visited_.count(key)) {
+                    continue; // уже импортировали
+                }
+                visited_.insert(key);
+
+                auto it = STDLIB_MODULES.find(module_name);
+                if (it == STDLIB_MODULES.end()) {
+                    diag_.emit(DiagLevel::Error, tok.loc,
+                        "Unknown stdlib module: '" + module_name +
+                        "'. Available: io, math, string");
+                    continue;
+                }
+
+                source_store_.push_back(it->second);
+                const std::string& stored = source_store_.back();
+                Lexer mod_lex(stored, "<stdlib/" + module_name + ".flx>", diag_);
+                auto mod_tokens = mod_lex.tokenize();
+                auto expanded   = process(mod_tokens, current_file);
+
+                for (auto& t : expanded)
+                    if (t.kind != TokenKind::END_OF_FILE)
+                        result.push_back(t);
+                continue;
+            }
 
             // Не PP_IMPORT — копируем токен как есть
             if (tok.kind != TokenKind::PP_IMPORT) {

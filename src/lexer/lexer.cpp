@@ -186,8 +186,29 @@ namespace flux {
         while (!at_end() && std::isalpha(peek())) advance();
 
         std::string_view directive = source_.substr(kw_start, cursor_ - kw_start);
-        if (directive == "import")
+        if (directive == "import") {
+            // Пропускаем пробелы после "import"
+            while (!at_end() && peek() == ' ') advance();
+
+            if (!at_end() && peek() == '<') {
+                advance(); // съедаем '<'
+                size_t mod_start = cursor_;
+                while (!at_end() && peek() != '>' && peek() != '\n') advance();
+                if (at_end() || peek() == '\n') {
+                    diag_.emit(DiagLevel::Error, {filepath_, line_, col_},
+                        "Expected '>' after module name in #import <...>");
+                    return make_token(TokenKind::END_OF_FILE, start);
+                }
+                // Лексема = имя модуля (без < >)
+                Token tok;
+                tok.kind   = TokenKind::PP_IMPORT_SYS;
+                tok.lexeme = source_.substr(mod_start, cursor_ - mod_start);
+                tok.loc    = {filepath_, line_, col_};
+                advance(); // съедаем '>'
+                return tok;
+            }
             return make_token(TokenKind::PP_IMPORT, start);
+        }
 
         diag_.emit(DiagLevel::Error, {filepath_, line_, col_},
                 "Unknown preprocessor directive");

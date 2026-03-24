@@ -1075,6 +1075,12 @@ namespace flux {
         if (is_numeric(from) && is_numeric(to))
             return true;
 
+        // &str / string — строковые типы совместимы между собой
+        auto is_str_type = [](const std::string& t) {
+            return t == "string" || t == "&str" || t == "str";
+        };
+        if (is_str_type(from) && is_str_type(to)) return true;
+
         // Result с wildcard совместимостью
         if (from.find("Result<") == 0 && to.find("Result<") == 0) {
             if (from.find('_') != std::string::npos ||

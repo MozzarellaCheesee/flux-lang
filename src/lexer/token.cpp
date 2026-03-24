@@ -98,7 +98,10 @@ namespace flux {
             case TokenKind::COLON_COLON: return "COLON_COLON";
             case TokenKind::QUESTION:    return "QUESTION";
             // Препроцессор
-            case TokenKind::PP_IMPORT:   return "PP_IMPORT";
+            case TokenKind::PP_IMPORT:     return "PP_IMPORT";
+            case TokenKind::PP_IMPORT_SYS: return "PP_IMPORT_SYS";
+            // Ключевые слова (продолжение)
+            case TokenKind::KW_EXTERN:     return "KW_EXTERN";
             // Служебные
             case TokenKind::END_OF_FILE: return "EOF";
             default:                     return "UNKNOWN";

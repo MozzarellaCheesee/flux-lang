@@ -44,6 +44,7 @@ namespace flux {
         {"class",    TokenKind::KW_CLASS},
         {"impl",     TokenKind::KW_IMPL},
         {"self",     TokenKind::KW_SELF},
+        {"extern",   TokenKind::KW_EXTERN},
     };
 
     class Lexer {

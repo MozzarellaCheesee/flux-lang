@@ -1,49 +1,21 @@
-#import "./add.flx"
-
-struct Point {
-    pub x: int32,
-    pub y: int32
-}
-
-impl Point {
-    pub fnc new(x: int32, y: int32) -> Point {
-        return Point {
-            x: x,
-            y: y,
-        };
-    }
-
-    pub fnc max(self, other: Point) -> Point {
-        if (self.foo() > other.foo()) {
-            return self;
-        } else {
-            return other;
-        }
-    }
-
-    fnc foo(self) -> int32 {
-        return self.x + self.y;
-    }
-}
-
 class People {
     name: &str;
-    age: int32;
+    age: int16;
 
-    pub fnc new(name: &str, age: int32) -> People {
+    pub fnc new(name_: &str, age_: int16) -> People {
         return People {
-            name: name,
-            age: age,
+            name: name_,
+            age: age_,
         };
     }
 
-    pub fnc printname(self) -> () {
-        println(self.name);
+    pub fnc get_name(self) -> &str {
+        return self.name;
     }
 }
 
 fnc main() -> int32 {
-    let fib = add(6);
-    println(fib);
+    let p = People.new("John", 18);
+    println(p.get_name());
     return 0;
 }

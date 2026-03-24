@@ -35,4 +35,28 @@ std::vector<CompletionItem> compute_completions(
     uint32_t col
 );
 
+struct HoverResult {
+    std::string markdown; // empty string = no hover info
+};
+
+HoverResult compute_hover(
+    const std::string& source,
+    const std::string& filepath,
+    uint32_t line,   // 1-based
+    uint32_t col     // 1-based
+);
+
+struct DefinitionResult {
+    std::string filepath; // пустая строка = не найдено
+    uint32_t    line = 0; // 1-based
+    uint32_t    col  = 0; // 1-based
+};
+
+DefinitionResult compute_definition(
+    const std::string& source,
+    const std::string& filepath,
+    uint32_t line,   // 1-based
+    uint32_t col     // 1-based
+);
+
 } // namespace flux

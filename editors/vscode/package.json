@@ -1,9 +1,9 @@
 {
-  "name": "flux-lang",
-  "displayName": "Flux Language",
-  "description": "Syntax highlighting and IntelliSense for the Flux programming language (.flx)",
-  "version": "0.2.0",
-  "publisher": "flux-lang",
+  "name": "flux-language",
+  "displayName": "Flux Language (C++/Rust)",
+  "description": "Syntax highlighting, IntelliSense, and hover documentation for the Flux programming language (.flx)",
+  "version": "0.3.0",
+  "publisher": "MozzarellaDev",
   "engines": {
     "vscode": "^1.75.0"
   },
@@ -11,16 +11,17 @@
     "Programming Languages"
   ],
   "main": "./extension.js",
-  "activationEvents": [
-    "onLanguage:flux"
-  ],
   "contributes": {
     "languages": [
       {
         "id": "flux",
         "aliases": ["Flux", "flux"],
         "extensions": [".flx"],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/flux-light.svg",
+          "dark": "./icons/flux-dark.svg"
+        }
       }
     ],
     "grammars": [

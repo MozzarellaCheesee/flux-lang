@@ -16,7 +16,7 @@ namespace flux {
     private:
         // ── Top-level ────────────────────────────────────
         std::unique_ptr<ASTNode>    parse_top_level();
-        std::unique_ptr<FuncDecl>   parse_func_decl(bool is_pub);
+        std::unique_ptr<FuncDecl>   parse_func_decl(bool is_pub, bool is_extern = false);
         std::unique_ptr<StructDecl> parse_struct_decl(bool is_pub);
         std::unique_ptr<ImplDecl>   parse_impl_decl();
         std::unique_ptr<ClassDecl>  parse_class_decl(bool is_pub);

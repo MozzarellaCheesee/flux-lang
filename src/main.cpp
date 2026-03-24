@@ -22,6 +22,7 @@
 #include "flux/sema/sema.h"
 #include "flux/ast/ast_printer.h"
 #include "flux/complete/complete.h"
+#include "flux/lsp/server.h"
 
 static const char* FLUXC_VERSION = "0.1.0";
 
@@ -266,6 +267,10 @@ static int run_complete(int argc, char** argv) {
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char** argv) {
+    // LSP server mode: fluxc --lsp
+    if (argc >= 2 && std::string_view(argv[1]) == "--lsp")
+        return flux::run_lsp_server();
+
     // Режим автодополнения: fluxc --complete <line> <col> <file>
     if (argc >= 2 && std::string_view(argv[1]) == "--complete")
         return run_complete(argc, argv);

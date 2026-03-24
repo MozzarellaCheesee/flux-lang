@@ -6,3 +6,5 @@
 .vs
 /out
 *.exe
+/editors
+/bin

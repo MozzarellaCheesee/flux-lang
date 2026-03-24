@@ -19,17 +19,18 @@ namespace flux {
 
     struct FuncDecl : ASTNode {
         bool                                    is_pub;
+        bool                                    is_extern; // объявлено через extern fnc
         bool                                    has_self;  // первый параметр self
         std::string                             name;
         std::vector<std::unique_ptr<ParamDecl>> params;    // без параметра self
         std::unique_ptr<TypeNode>               return_type;
         std::unique_ptr<BlockStmt>              body;
 
-        FuncDecl(bool pub, bool self, std::string n,
+        FuncDecl(bool pub, bool ext, bool self, std::string n,
                 std::vector<std::unique_ptr<ParamDecl>> p,
                 std::unique_ptr<TypeNode> rt,
                 std::unique_ptr<BlockStmt> b)
-            : is_pub(pub), has_self(self), name(std::move(n)), 
+            : is_pub(pub), is_extern(ext), has_self(self), name(std::move(n)),
             params(std::move(p)), return_type(std::move(rt)), body(std::move(b)) {}
         void accept(ASTVisitor& v) override;
     };

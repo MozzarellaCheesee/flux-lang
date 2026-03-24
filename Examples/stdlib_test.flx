@@ -1,0 +1,44 @@
+#import <io>
+#import <math>
+#import <string>
+
+fnc main() -> int32 {
+    // io
+    println("=== io test ===");
+    println("Enter a number (or just press Enter to skip):");
+
+    // math
+    println("=== math test ===");
+    let x: double = 16.0;
+    let s: double = sqrt(x);
+    println("sqrt(16) = ", s);
+
+    let a: int32 = -5;
+    let b: int32 = abs_i32(a);
+    println("abs(-5) = ", b);
+
+    let m: int32 = min_i32(3, 7);
+    let n: int32 = max_i32(3, 7);
+    println("min(3,7) = ", m);
+    println("max(3,7) = ", n);
+
+    // string
+    println("=== string test ===");
+    let greeting: string = "Hello, World!";
+    let up: string = str_to_upper(greeting);
+    let low: string = str_to_lower(greeting);
+    println("original: ", greeting);
+    println("upper:    ", up);
+    println("lower:    ", low);
+
+    let has: bool = str_contains(greeting, "World");
+    println("contains 'World': ", has);
+
+    let len: int32 = str_len(greeting);
+    println("length: ", len);
+
+    let ns: string = to_string_i32(42);
+    println("to_string(42) = ", ns);
+
+    return 0;
+}

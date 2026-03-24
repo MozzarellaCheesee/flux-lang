@@ -138,7 +138,7 @@ inline bool str_ends_with(const std::string& __rs__, const std::string& __rp__) 
     return __rs__.size() >= __rp__.size() && __rs__.compare(__rs__.size() - __rp__.size(), __rp__.size(), __rp__) == 0;
 }
 inline std::string str_to_upper(std::string __rs__) {
-    std::transform(s.begin(), __rs__.end(), __rs__.begin(), [](unsigned char c){ return std::toupper(c); });
+    std::transform(__rs__.begin(), __rs__.end(), __rs__.begin(), [](unsigned char c){ return std::toupper(c); });
     return __rs__;
 }
 inline bool    str_contains (const std::string& __rs__, const std::string& sub, const bool case_sensitive = true) {
@@ -156,17 +156,17 @@ inline std::string str_to_lower(std::string __rs__) {
     return __rs__;
 }
 inline std::string str_repeat(const std::string& __rs__, int32_t __rn__) {
-    std::string r; r.reserve(s.size() * (__rn__ > 0 ? __rn__ : 0));
+    std::string r; r.reserve(__rs__.size() * (__rn__ > 0 ? __rn__ : 0));
     for (int32_t __ri__ = 0; __ri__ < __rn__; ++__ri__) r += __rs__;
     return r;
 }
 inline std::string str_trim_start(std::string __rs__) {
-    auto it = std::find_if(s.begin(), __rs__.end(), [](unsigned char c){ return !std::isspace(c); });
-    __rs__.erase(s.begin(), it);
+    auto it = std::find_if(__rs__.begin(), __rs__.end(), [](unsigned char c){ return !std::isspace(c); });
+    __rs__.erase(__rs__.begin(), it);
     return __rs__;
 }
 inline std::string str_trim_end(std::string __rs__) {
-    auto it = std::find_if(s.rbegin(), __rs__.rend(), [](unsigned char c){ return !std::isspace(c); });
+    auto it = std::find_if(__rs__.rbegin(), __rs__.rend(), [](unsigned char c){ return !std::isspace(c); });
     __rs__.erase(it.base(), __rs__.end());
     return __rs__;
 }
@@ -177,7 +177,7 @@ inline std::string str_replace(std::string __rs__, const std::string& from, cons
         __rs__.replace(pos, from.size(), to);
         pos += to.size();
     }
-    return s;
+    return __rs__;
 }
 inline std::string str_concat(const std::string& __ra__, const std::string& __rb__) { return __ra__ + __rb__; }
 inline int32_t     str_char_at(const std::string& __rs__, int32_t __ri__) {
